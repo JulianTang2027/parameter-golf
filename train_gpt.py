@@ -93,13 +93,7 @@ class Hyperparameters:
     swa_start_frac = float(os.environ.get("SWA_START_FRAC", 0.4))
     swa_every = int(os.environ.get("SWA_EVERY", 50))
 
-    # LeakyReLU alpha for MLP activation: 0.0 = standard ReLU^2, >0 = LeakyReLU(alpha)^2
-    leaky_relu_alpha = float(os.environ.get("LEAKY_RELU_ALPHA", 0.0))
-
-    # Three-tier token weighting: Gaussian-shaped loss weight centered on batch mean loss.
-    # Tokens near the mean get full weight; both "too easy" (low loss) and "too noisy"
-    # (high loss) extremes get down-weighted. 0.0 = uniform weighting (standard CE loss).
-    # Values like 1.5-2.5 focus training on the "learnable frontier".
+    # Token weighting: 0.0 = standard CE, >0 = Gaussian weight focusing on learnable tokens
     token_weight_sigma = float(os.environ.get("TOKEN_WEIGHT_SIGMA", 0.0))
 
 # -----------------------------
@@ -569,19 +563,15 @@ class CausalSelfAttention(nn.Module):
 
 
 class MLP(nn.Module):
-    def __init__(self, dim: int, mlp_mult: float, leaky_relu_alpha: float = 0.0):
+    def __init__(self, dim: int, mlp_mult: float):
         super().__init__()
         hidden = int(mlp_mult * dim)
         self.fc = CastedLinear(dim, hidden, bias=False)
         self.proj = CastedLinear(hidden, dim, bias=False)
         self.proj._zero_init = True
-        self.leaky_relu_alpha = leaky_relu_alpha
 
     def forward(self, x: Tensor) -> Tensor:
-        if self.leaky_relu_alpha > 0:
-            x = F.leaky_relu(self.fc(x), negative_slope=self.leaky_relu_alpha)
-        else:
-            x = torch.relu(self.fc(x))
+        x = torch.relu(self.fc(x))
         return self.proj(x.square())
 
 
@@ -625,12 +615,12 @@ class BigramHashEmbedding(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, dim: int, num_heads: int, num_kv_heads: int, mlp_mult: float, rope_base: float, qk_gain_init: float, leaky_relu_alpha: float = 0.0):
+    def __init__(self, dim: int, num_heads: int, num_kv_heads: int, mlp_mult: float, rope_base: float, qk_gain_init: float):
         super().__init__()
         self.attn_norm = RMSNorm()
         self.mlp_norm = RMSNorm()
         self.attn = CausalSelfAttention(dim, num_heads, num_kv_heads, rope_base, qk_gain_init)
-        self.mlp = MLP(dim, mlp_mult, leaky_relu_alpha=leaky_relu_alpha)
+        self.mlp = MLP(dim, mlp_mult)
         self.attn_scale = nn.Parameter(torch.ones(dim, dtype=torch.float32))
         self.mlp_scale = nn.Parameter(torch.ones(dim, dtype=torch.float32))
         self.resid_mix = nn.Parameter(torch.stack((torch.ones(dim), torch.zeros(dim))).float())
@@ -660,7 +650,6 @@ class GPT(nn.Module):
         qk_gain_init: float,
         bigram_vocab_size: int = 0,
         bigram_dim: int = 128,
-        leaky_relu_alpha: float = 0.0,
         token_weight_sigma: float = 0.0,
     ):
         super().__init__()
@@ -679,7 +668,7 @@ class GPT(nn.Module):
         self.smear = SmearGate(model_dim)
         self.blocks = nn.ModuleList(
             [
-                Block(model_dim, num_heads, num_kv_heads, mlp_mult, rope_base, qk_gain_init, leaky_relu_alpha=leaky_relu_alpha)
+                Block(model_dim, num_heads, num_kv_heads, mlp_mult, rope_base, qk_gain_init)
                 for _ in range(num_layers)
             ]
         )
@@ -923,7 +912,6 @@ def main() -> None:
     log0(f"val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path={args.tokenizer_path}")
     log0(f"train_loader:dataset:{dataset_dir.name} train_shards:{actual_train_files}")
     log0(f"val_loader:shards pattern={args.val_files} tokens:{val_tokens.numel() - 1}")
-    log0(f"leaky_relu_alpha:{args.leaky_relu_alpha}")
     log0(f"token_weight_sigma:{args.token_weight_sigma}")
 
     # MODEL + OPTIMIZER SETUP
@@ -941,7 +929,6 @@ def main() -> None:
         qk_gain_init=args.qk_gain_init,
         bigram_vocab_size=args.bigram_vocab_size,
         bigram_dim=args.bigram_dim,
-        leaky_relu_alpha=args.leaky_relu_alpha,
         token_weight_sigma=args.token_weight_sigma,
     ).to(device).bfloat16()
     for module in base_model.modules():
