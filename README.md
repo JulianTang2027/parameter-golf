@@ -1,3 +1,9 @@
+> **My submissions**
+> - [Non-record: Gaussian per-token loss reweighting, negative result (#1360)](https://github.com/openai/parameter-golf/pull/1360): why the training-time loss looked great while the actual metric got worse
+> - [3-seed reproduction + ablations of #2101 (#2117)](https://github.com/openai/parameter-golf/pull/2117)
+>
+> *Original README below.*
+
 <img width="3840" height="1280" alt="1920x640-discord" src="https://github.com/user-attachments/assets/90607b26-171f-476a-90ae-69b9dbb7cb30" />
 
 <br>
